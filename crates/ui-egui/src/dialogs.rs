@@ -155,6 +155,9 @@ pub enum Dialog {
     Security(Box<crate::security::SecurityDialog>),
     /// Find and Replace in the message being written ([`crate::find_replace`]).
     FindReplace(crate::find_replace::FindReplace),
+    /// Review › Spelling & Grammar (#954): the places found in the message being written, one at a
+    /// time, with what could stand in for each.
+    Spelling(Box<crate::proof_dialog::Spelling>),
     /// Insert › Symbol ([`crate::symbol`]).
     Symbol(crate::symbol::Symbol),
 }
@@ -267,6 +270,7 @@ impl Dialog {
                     "find"
                 }
             }
+            Dialog::Spelling(_) => "spelling",
         }
     }
 
@@ -389,6 +393,9 @@ pub(crate) fn open_dialog(app: &mut MailApp, name: &str, params: &Value) -> Opti
     }
     if matches!(name, "find" | "replace") {
         return crate::find_replace::FindReplace::open(app, name == "replace").map(Dialog::FindReplace);
+    }
+    if name == "spelling" {
+        return crate::proof_dialog::Spelling::open(app).map(|d| Dialog::Spelling(Box::new(d)));
     }
     if matches!(name, "attachItem" | "businessCard") {
         app.session.compose.as_ref()?;
@@ -1251,6 +1258,8 @@ pub fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "insert.dateTime" if !has("format") => Some("dateTime"),
         "insert.symbol" if !has("char") && !has("code") => Some("symbol"),
         "edit.find" if !has("text") => Some("find"),
+        // (The walk starts at the dialog's first frame, with what the window already found.)
+        "review.spelling" if !has("again") && !has("grammar") => Some("spelling"),
         "edit.replace" if !has("text") => Some("replace"),
         // (What it answers is counts to look at.)
         "review.wordCount" => Some("wordCount"),
@@ -2087,6 +2096,16 @@ pub fn show(app: &mut MailApp, ctx: &egui::Context) {
             close |= !open || done;
             // The keyboard goes back to the text.
             if close {
+                app.want_body_focus();
+            }
+        }
+        Dialog::Spelling(dialog) => {
+            let mut done = false;
+            let open = window(ctx, tl!("Spelling & Grammar"), crate::proof_dialog::WIDTH, |ui| done = dialog.show(app, ui, enter));
+            close |= !open || done;
+            if close {
+                // The walk is over: nothing of it is left to apply.
+                let _ = app.session.run("proof.close", &json!({}));
                 app.want_body_focus();
             }
         }

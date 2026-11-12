@@ -728,6 +728,7 @@ fn options(app: &mut MailApp, ui: &mut Ui, t: &Tokens) {
         });
     });
     section(ui, tl!("Security"), t);
+    proofing(app, ui, t);
     crate::security::options(app, ui, t);
     section(ui, tl!("Calendar"), t);
     let mut twelve = prefs.twelve_hour;
@@ -892,5 +893,125 @@ fn about(app: &mut MailApp, ui: &mut Ui, t: &Tokens) {
     if ui.button(tl!("Search Commands")).clicked() {
         app.ui.backstage = false;
         let _ = app.run("ui.dialog", json!({"name": "commands"}));
+    }
+}
+
+/// File › Options › Spelling & Grammar (#954): what is checked, in which languages, with which
+/// words, and where grammar comes from.
+///
+/// Everything here is a setting of the session's ([`mailcraft_engine::Prefs::proof`]), changed by
+/// `proof.set` (or `proof.addWord` / `proof.removeWord`), which the front end keeps between runs.
+/// Nothing of a message is on this page, and no message is sent by it: the connection test asks the
+/// grammar server one made-up sentence and says what came back.
+fn proofing(app: &mut MailApp, ui: &mut Ui, t: &Tokens) {
+    use mailcraft_model::proof::Language;
+    section(ui, tl!("Spelling & Grammar"), t);
+    let settings = app.session.prefs.proof.clone();
+    let set = |app: &mut MailApp, params: serde_json::Value| {
+        let _ = app.run("proof.set", params);
+    };
+    let mut spelling = settings.check_spelling;
+    if ui
+        .checkbox(&mut spelling, tl!("Check spelling as you write"))
+        .on_hover_text(tl!("Every word is looked at against every dictionary that is on, and a word is right when any of them knows it: English and French in one sentence need no switching."))
+        .changed()
+    {
+        set(app, json!({"checkSpelling": spelling}));
+    }
+    let mut live = settings.as_you_type;
+    if ui
+        .checkbox(&mut live, tl!("Check while typing, not only when asked"))
+        .on_hover_text(tl!("Off: Review › Spelling & Grammar checks the message when it is asked to."))
+        .changed()
+    {
+        set(app, json!({"asYouType": live}));
+    }
+    // The dictionaries: every one ticked is looked at, at the same time.
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tl!("Dictionaries"));
+        for language in Language::ALL {
+            let mut on = settings.languages.contains(&language);
+            if ui.checkbox(&mut on, language.name()).changed() {
+                let mut languages: Vec<Language> = settings.languages.clone();
+                if on && !languages.contains(&language) {
+                    languages.push(language);
+                } else if !on {
+                    languages.retain(|l| *l != language);
+                }
+                if !languages.is_empty() {
+                    let codes: Vec<&str> = languages.iter().map(|l| l.code()).collect();
+                    set(app, json!({"languages": codes}));
+                }
+            }
+        }
+    });
+    let read = app.session.proof.read.clone();
+    if let Some(note) = &app.session.proof.note {
+        ui.label(egui::RichText::new(note.as_str()).color(t.orange).small());
+    } else if !read.is_empty() {
+        ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Reading: {names}"), &[("names", &read.join(", "))])).color(t.text_dim).small());
+    }
+    // The owner's own words.
+    let personal = settings.personal_words();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(tl!("Your own words"));
+        if personal.is_empty() {
+            ui.label(egui::RichText::new(tl!("None yet.")).color(t.text_dim).small());
+        }
+        for word in personal.iter().take(64) {
+            if ui.small_button(format!("{word} ×")).on_hover_text(tl!("Remove it from the dictionary")).clicked() {
+                let _ = app.run("proof.removeWord", json!({"word": word}));
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let mut text: String = ui.data(|d| d.get_temp::<String>(egui::Id::unique("opt_proof_word"))).unwrap_or_default();
+        let resp = ui.add(egui::TextEdit::singleline(&mut text).hint_text(tl!("Add a word")).desired_width(180.0));
+        if resp.changed() {
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique("opt_proof_word"), text.clone()));
+        }
+        if ui.add_enabled(!text.trim().is_empty(), egui::Button::new(tl!("Add"))).clicked() {
+            let _ = app.run("proof.addWord", json!({"word": text.trim()}));
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique("opt_proof_word"), String::new()));
+        }
+    });
+    // Grammar: a LanguageTool server, on this computer unless the owner says otherwise.
+    ui.add_space(2.0);
+    let mut grammar = settings.check_grammar;
+    if ui
+        .checkbox(&mut grammar, tl!("Check grammar with a LanguageTool server"))
+        .on_hover_text(tl!("The text of the message is sent to that server, and to nothing else. A server on this computer keeps it here; one on another computer does not, and the owner has to allow it below."))
+        .changed()
+    {
+        set(app, json!({"checkGrammar": grammar}));
+    }
+    row(ui, tl!("Server"), |ui| {
+        let mut url = settings.grammar_url.clone();
+        let resp = ui.add(egui::TextEdit::singleline(&mut url).desired_width(260.0).hint_text("http://127.0.0.1:8081"));
+        if resp.lost_focus() && url != settings.grammar_url {
+            set(app, json!({"grammarUrl": url.trim()}));
+        }
+        if ui.button(tl!("Test the connection")).clicked() {
+            crate::proof::test(app);
+        }
+    });
+    let mut allow = settings.allow_remote;
+    if ui
+        .checkbox(&mut allow, tl!("Allow a grammar server on another computer"))
+        .on_hover_text(tl!("Off: only a server on this computer is spoken to, whatever the address says, and turning this off turns grammar checking off with it if its server is elsewhere."))
+        .changed()
+    {
+        set(app, json!({"allowRemote": allow}));
+    }
+    if let Some(said) = crate::proof::test_result(app) {
+        ui.label(egui::RichText::new(said).color(t.text_dim).small());
+    }
+    if !settings.ignored_rules.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label(crate::tln!(settings.ignored_rules.len(), "{n} grammar rule is quiet", "{n} grammar rules are quiet"));
+            if ui.button(tl!("Check every rule again")).clicked() {
+                let _ = app.run("proof.forgetRules", json!({}));
+            }
+        });
     }
 }

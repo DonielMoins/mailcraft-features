@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 use crate::ModelError;
 
 mod grammar;
-mod spell;
 #[cfg(test)]
 mod grammar_tests;
+mod spell;
 #[cfg(test)]
 mod spell_tests;
 #[cfg(test)]

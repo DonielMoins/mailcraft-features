@@ -72,6 +72,7 @@ struct Answer {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Match {
     #[serde(default)]
     message: String,
@@ -83,7 +84,7 @@ struct Match {
     replacements: Vec<Replacement>,
     #[serde(default)]
     rule: Option<Rule>,
-    #[serde(default)]
+    #[serde(default, alias = "rule_id")]
     rule_id: Option<String>,
 }
 
@@ -94,6 +95,7 @@ struct Replacement {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Rule {
     #[serde(default)]
     id: Option<String>,
@@ -109,6 +111,10 @@ struct Rule {
 /// says). `ignored` names the rule ids the owner told to be quiet.
 pub fn parse_answer(body: &[u8], text: &str, language: Language, ignored: &[String]) -> Result<Vec<Diagnostic>, ProofError> {
     if body.len() > super::MAX_ANSWER {
+        return Err(ProofError::Answer);
+    }
+    // An answer is one object: `[]`, a bare string or a number is not one, whatever it parses to.
+    if !body.trim_ascii_start().starts_with(b"{") {
         return Err(ProofError::Answer);
     }
     let answer: Answer = serde_json::from_slice(body).map_err(|_| ProofError::Answer)?;
@@ -237,7 +243,10 @@ mod unit {
     #[test]
     fn an_answer_that_is_not_one_is_an_error_and_never_a_panic() {
         for body in [b"not json".as_slice(), b"{}[]".as_slice(), b"null".as_slice(), b"".as_slice()] {
-            assert!(parse_answer(body, "text", Language::EnCa, &[]).is_err() || parse_answer(body, "text", Language::EnCa, &[]).is_ok_and(|d| d.is_empty()));
+            assert!(
+                parse_answer(body, "text", Language::EnCa, &[]).is_err()
+                    || parse_answer(body, "text", Language::EnCa, &[]).is_ok_and(|d| d.is_empty())
+            );
         }
     }
 }

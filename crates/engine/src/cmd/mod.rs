@@ -97,9 +97,11 @@ mod opened_file_tests;
 pub mod people;
 pub mod people_merge;
 pub mod picture;
-pub mod proof;
 #[cfg(test)]
 mod picture_tests;
+pub mod proof;
+#[cfg(test)]
+mod proof_tests;
 #[cfg(test)]
 mod protected_moves_tests;
 #[cfg(test)]

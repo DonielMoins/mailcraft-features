@@ -37,6 +37,11 @@ const MAX_CONDITION: usize = 32;
 /// Most probes the suggester makes for one word: what keeps a right click quick on a bad word.
 const MAX_PROBES: usize = 20_000;
 
+/// Most words of one dictionary that are measured for one misspelling, before the rest of it is
+/// left for another day: a dictionary holds far more words that begin as a word does than could
+/// be within two edits of it.
+const MOST_PER_DICTIONARY: usize = 8_000;
+
 /// One language's words, sorted, as keys ([`key`]).
 #[derive(Clone, Debug, Default)]
 pub struct Dictionary {
@@ -160,6 +165,11 @@ impl Dictionary {
     pub fn all(&self) -> &[String] {
         &self.words
     }
+
+    /// Whether `word` is one the dictionary knows, written as it is (any case, either apostrophe).
+    pub fn holds(&self, word: &str) -> bool {
+        self.knows(&key(word))
+    }
 }
 
 /// Which flags of a `.dic` mean what, and the affixes they name.
@@ -251,12 +261,7 @@ impl Flags {
         match self.kind {
             FlagKind::Char | FlagKind::Long => {
                 let size = if self.kind == FlagKind::Char { 1 } else { 2 };
-                text.chars()
-                    .collect::<Vec<char>>()
-                    .chunks(size)
-                    .map(|c| c.iter().collect::<String>())
-                    .filter(|f| !f.is_empty() && f != "/")
-                    .collect()
+                text.chars().collect::<Vec<char>>().chunks(size).map(|c| c.iter().collect::<String>()).filter(|f| !f.is_empty() && f != "/").collect()
             }
             FlagKind::Num => text.split(',').map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect(),
         }
@@ -267,15 +272,6 @@ impl Flags {
         let own = own.to_vec();
         self.rules.iter().filter(move |(flag, _)| own.iter().any(|o| o == flag)).map(|(_, rule)| rule)
     }
-}
-
-/// The flag of an affix line: the second word of `PFX A Y 1`.
-fn parts_flag(line: &str) -> String {
-    let mut parts = line.split_whitespace();
-    let (Some(_), Some(flag)) = (parts.next(), parts.next()) else {
-        return String::new();
-    };
-    flag.to_string()
 }
 
 /// One affix: a letter or letters taken off one end of a stem (`strip`) and put on the other end of
@@ -298,9 +294,7 @@ impl Rule {
         if stem_chars.len() > MAX_STEM {
             return None;
         }
-        let (near, far) = if self.prefix { (0, stem_chars.len().min(MAX_CONDITION)) } else { (stem_chars.len().saturating_sub(MAX_CONDITION), stem_chars.len()) };
-        let near = near.min(far);
-        if !matches_condition(&stem_chars.get(near..far)?, &self.condition) {
+        if !matches_condition(&stem_chars, &self.condition, self.prefix) {
             return None;
         }
         let strip: Vec<char> = self.strip.chars().collect();
@@ -323,94 +317,94 @@ impl Rule {
 }
 
 /// Whether `chars` matches an affix `condition`: literal characters, `.` for any one, `[abc]` for
-/// one of a set and `[^abc]` for one that is not. The condition is matched against the stem's end
-/// (a suffix) or start (a prefix), so a shorter part than the condition never matches.
-fn matches_condition(chars: &[char], condition: &str) -> bool {
+/// one of a set and `[^abc]` for one that is not. Each element of a condition matches exactly one
+/// character, read from the stem's start for a prefix and its end for a suffix — which is what keeps
+/// a dictionary's `-s` rule off the words its `y → ies` rule is for.
+fn matches_condition(chars: &[char], condition: &str, prefix: bool) -> bool {
     if condition.is_empty() {
         return true;
     }
-    let pattern: Vec<char> = condition.chars().collect();
+    // A condition this reader cannot read is taken to hold: one word too many is a mistake the
+    // owner can add to their dictionary, one word too few is one they cannot correct.
+    let Some(pattern) = elements(condition) else {
+        return true;
+    };
     if chars.len() < pattern.len() {
         return false;
     }
-    let tail = chars.get(chars.len() - pattern.len()..).unwrap_or_default();
-    let mut p = 0;
-    let mut c = 0;
-    while p < pattern.len() {
-        let Some(&want) = pattern.get(p) else { return true };
-        match want {
+    let part = if prefix { chars.get(..pattern.len()) } else { chars.get(chars.len() - pattern.len()..) };
+    let Some(part) = part else {
+        return false;
+    };
+    pattern.iter().zip(part).all(|(want, got)| match want {
+        One::Any => true,
+        One::Of(inside) => inside.contains(got),
+        One::Not(inside) => !inside.contains(got),
+        One::This(c) => c == got,
+    })
+}
+
+/// One character of an affix condition.
+enum One {
+    /// `.`
+    Any,
+    /// `[abc]`
+    Of(Vec<char>),
+    /// `[^abc]`
+    Not(Vec<char>),
+    /// A character written as itself.
+    This(char),
+}
+
+/// The characters a condition matches, one element each; `None` for one that is not written as this
+/// reader understands (an unclosed `[`, a condition longer than [`MAX_CONDITION`]).
+fn elements(condition: &str) -> Option<Vec<One>> {
+    let chars: Vec<char> = condition.chars().collect();
+    if chars.is_empty() || chars.len() > MAX_CONDITION {
+        return None;
+    }
+    let mut out: Vec<One> = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        match chars.get(i)? {
             '.' => {
-                if c >= tail.len() {
-                    return false;
-                }
-                p += 1;
-                c += 1;
+                out.push(One::Any);
+                i += 1;
             }
             '[' => {
-                let mut negate = false;
-                p += 1;
-                if pattern.get(p) == Some(&'^') {
-                    negate = true;
-                    p += 1;
+                let mut j = i + 1;
+                let negate = chars.get(j) == Some(&'^');
+                if negate {
+                    j += 1;
                 }
-                let mut matched = false;
-                while let Some(&inside) = pattern.get(p) {
-                    if inside == ']' {
-                        break;
+                let mut inside: Vec<char> = Vec::new();
+                while *chars.get(j)? != ']' {
+                    if inside.len() >= MAX_CONDITION {
+                        return None;
                     }
-                    if tail.get(c) == Some(&inside) {
-                        matched = true;
-                    }
-                    p += 1;
+                    inside.push(*chars.get(j)?);
+                    j += 1;
                 }
-                if pattern.get(p) != Some(&']') || c >= tail.len() {
-                    return false;
-                }
-                if matched == negate {
-                    return false;
-                }
-                p += 1;
-                c += 1;
+                out.push(if negate { One::Not(inside) } else { One::Of(inside) });
+                i = j + 1;
             }
-            other => {
-                if tail.get(c) != Some(&other) {
-                    return false;
-                }
-                p += 1;
-                c += 1;
+            c => {
+                out.push(One::This(*c));
+                i += 1;
             }
         }
     }
-    true
+    (!out.is_empty()).then_some(out)
 }
 
-impl Dictionary {
-    /// Whether `word` is one the dictionary knows, for a lookup of a whole word written as it is.
-    pub fn holds(&self, word: &str) -> bool {
-        self.knows(&key(word))
-    }
-}
-
-impl Speller {
-    /// Every word of a dictionary, for the suggester: nothing else is looked at.
-    fn each_word<F: FnMut(&str)>(dict: &Dictionary, mut f: F) {
-        for w in &dict.words {
-            f(w);
-        }
-    }
-
-    /// Whether a word would be suggested: a dictionary may say a word is not to be.
-    fn suggestable(&self, word: &str) -> bool {
-        let k = key(word);
-        !self.dicts.iter().any(|d| d.no_suggest.contains(&k))
-    }
-}
-
-/// The owner's dictionaries, all of them on at once, and the words they added.
+/// The owner's dictionaries, all of them on at once, and the words they added: a word is right when
+/// any of them knows it, and a wrong word is looked at in every one of them for what could stand in
+/// its place.
 #[derive(Clone, Debug, Default)]
 pub struct Speller {
     pub(super) dicts: Vec<Dictionary>,
-    personal: Vec<String>,
+    /// The owner's own words, as keys ([`key`]), sorted.
+    pub(super) personal: Vec<String>,
 }
 
 impl Speller {
@@ -458,9 +452,26 @@ impl Speller {
         self.dicts.iter().find(|d| d.knows(&k)).map(|d| d.lang)
     }
 
-    /// Whether `word` is a word: any dictionary that is on says so, or the owner added it.
+    /// Whether `word` is a word: any dictionary that is on says so, or the owner added it. A word
+    /// joined by a hyphen or a dot (`rendez-vous`, `aujourd’hui`, `example.org`) is a word when it is
+    /// one of a dictionary's own or when every part of it is one, so that a dictionary that lists the
+    /// parts is not made to look like one that does not.
     pub fn is_word(&self, word: &str) -> bool {
-        self.accept(word).is_some()
+        if self.accept(word).is_some() {
+            return true;
+        }
+        let mut parts = 0usize;
+        for part in word.split(['-', '.', '\u{2010}', '\u{2011}']) {
+            let part = part.trim_matches(|c: char| !c.is_alphanumeric());
+            if part.is_empty() {
+                continue;
+            }
+            parts += 1;
+            if self.accept(part).is_none() {
+                return false;
+            }
+        }
+        parts > 1
     }
 
     /// The spelling mistakes of `text`, with what could stand in their place.
@@ -515,107 +526,126 @@ impl Speller {
         Some(if suggestions.is_empty() { d } else { d.suggesting(suggestions) })
     }
 
-    /// The words that could stand in for `word`, the best first: those a dictionary has, nearest
-    /// by the edits it takes to get there, and in the language the word was written in when one
-    /// can be told.
+    /// The words that could stand in for `word`, the best first: those a dictionary has within two
+    /// edits of it, nearest first, then those that begin as it does, then the shorter, then in order.
+    /// A word written with a capital comes back with one.
+    ///
+    /// The search is bounded on both sides: the candidates are the words of the dictionaries that
+    /// begin with the word's first letter and are of a length two of its own, and no more than
+    /// [`MAX_PROBES`] of them are measured at all, so a right click on the longest word there is
+    /// stays quick.
     pub fn suggest(&self, word: &str, limit: usize) -> Vec<String> {
         let limit = limit.min(super::MAX_SUGGESTIONS);
         let written = key(word);
+        let letters = written.chars().count();
         if written.is_empty() || limit == 0 {
             return Vec::new();
         }
         let upper = word.chars().next().is_some_and(|c| c.is_uppercase());
-        let mut found: Vec<(u8, usize, String)> = Vec::new();
+        let mut found: Vec<(u8, u8, usize, String)> = Vec::new();
         let mut probes = 0usize;
-        for dist in 1..=2u8 {
-            for candidate in edits(&written, dist) {
+        for dict in &self.dicts {
+            // The words that begin as it does: a word two edits away almost always does.
+            let (mut from, mut to) = span_beginning_with(&dict.words, written.chars().next().unwrap_or_default());
+            if to.saturating_sub(from) > MOST_PER_DICTIONARY {
+                to = from.saturating_add(MOST_PER_DICTIONARY);
+            }
+            while from < to {
+                let Some(candidate) = dict.words.get(from) else { break };
+                from += 1;
                 if probes >= MAX_PROBES {
                     break;
                 }
                 probes += 1;
-                if candidate == written || self.personal.binary_search(&candidate).is_ok() {
+                let size = candidate.chars().count();
+                if size.abs_diff(letters) > 2 || candidate == &written || dict.no_suggest.contains(candidate) {
                     continue;
                 }
-                let Some(accepting) = self.dicts.iter().find(|d| d.knows(&candidate)) else { continue };
-                if accepting.no_suggest.contains(&candidate) {
-                    continue;
-                }
-                let same_start = candidate.chars().next() == written.chars().next();
-                found.push((dist, if same_start { 0 } else { 1 }, candidate));
-                if found.len() >= 64 {
-                    break;
-                }
+                let Some(distance) = distance(&written, candidate, 2) else { continue };
+                let same_start = if candidate.chars().next() == written.chars().next() { 0 } else { 1 };
+                found.push((distance, same_start, size, candidate.clone()));
             }
         }
-        found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.len().cmp(&b.2.len())).then(a.2.cmp(&b.2)));
+        found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
         let mut out: Vec<String> = Vec::new();
-        for (_, _, mut candidate) in found {
+        for (_, _, _, candidate) in found {
             if out.len() >= limit {
                 break;
             }
-            if upper {
-                if let Some(first) = candidate.chars().next() {
-                    candidate = first.to_uppercase().collect::<String>() + candidate.get(first.len_utf8()..).unwrap_or_default();
-                }
-            }
-            if !out.contains(&candidate) {
-                out.push(candidate);
+            let said = if upper { capitalised(&candidate) } else { candidate };
+            if !out.iter().any(|kept| super::same_word(kept, &said)) && self.personal.binary_search(&key(&said)).is_err() {
+                out.push(said);
             }
         }
         out
     }
 }
 
-/// The words one edit (for `dist` 1) or two (2) away from `word`, bounded: only letters, the
-/// apostrophe and the hyphen are tried, and a shorter word is never made longer than by two.
-fn edits(word: &str, dist: u8) -> Vec<String> {
-    let alphabet: Vec<char> = "abcdefghijklmnopqrstuvwxyzàâäçéèêëîïôöùûüÿœæ'-".chars().collect();
-    let mut out: Vec<String> = Vec::new();
-    let chars: Vec<char> = word.chars().collect();
-    let n = chars.len();
-    fn push(out: &mut Vec<String>, word: &str, s: String) {
-        if out.len() < 4096 && s != word {
-            out.push(s);
+/// The words of `words` (sorted) that begin with `first`, whichever case it is written in: where
+/// that stretch is, as a range of the whole.
+fn span_beginning_with(words: &[String], first: char) -> (usize, usize) {
+    let mut from = words.len();
+    let mut to = 0usize;
+    for c in [first.to_lowercase().next().unwrap_or(first), first.to_uppercase().next().unwrap_or(first)] {
+        let mut prefix = String::new();
+        prefix.push(c);
+        let start = words.partition_point(|w| w.as_str() < prefix.as_str());
+        let run = words.get(start..).map_or(0, |rest| rest.partition_point(|w| w.starts_with(&prefix)));
+        if run > 0 {
+            from = from.min(start);
+            to = to.max(start.saturating_add(run));
         }
     }
-    // A letter taken out.
-    for i in 0..n {
-        let mut c = chars.clone();
-        c.remove(i);
-        push(&mut out, word, c.into_iter().collect());
+    (from.min(words.len()), to.min(words.len()).max(from.min(words.len())))
+}
+
+/// `word` with its first character in capitals.
+fn capitalised(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
-    // Two letters swapped.
-    for i in 0..n.saturating_sub(1) {
-        let mut c = chars.clone();
-        c.swap(i, i + 1);
-        push(&mut out, word, c.into_iter().collect());
+}
+
+/// How many edits apart `a` and `b` are, when that is no more than `most` (`None` when it is more):
+/// one letter changed, put in or taken out, or two neighbours swapped. Work stops as soon as the
+/// answer is too large, which is what keeps the whole search quick.
+fn distance(a: &str, b: &str, most: u8) -> Option<u8> {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > usize::from(most) {
+        return None;
     }
-    // A letter changed.
-    for i in 0..n {
-        for a in &alphabet {
-            if *a == chars[i] {
-                continue;
+    // The rows of the table, two at a time.
+    let mut before: Vec<usize> = (0..=b.len()).collect();
+    let mut now: Vec<usize> = vec![0; b.len() + 1];
+    let mut before_before: Vec<usize> = Vec::new();
+    for (i, ca) in a.iter().enumerate() {
+        if let Some(row) = now.first_mut() {
+            *row = i + 1;
+        }
+        let mut row_least = usize::MAX;
+        for (j, cb) in b.iter().enumerate() {
+            let swap = if i > 0 && j > 0 && *ca == b.get(j - 1).copied().unwrap_or_default() && a.get(i - 1) == Some(cb) {
+                before_before.get(j.saturating_sub(1)).copied().unwrap_or(usize::MAX)
+            } else {
+                usize::MAX
+            };
+            let value = (before.get(j).copied().unwrap_or(0) + usize::from(ca != cb))
+                .min(now.get(j).copied().unwrap_or(0) + 1)
+                .min(now.get(j + 1).copied().unwrap_or(0) + 1)
+                .min(swap);
+            if let Some(cell) = now.get_mut(j + 1) {
+                *cell = value;
             }
-            let mut c = chars.clone();
-            c[i] = *a;
-            push(&mut out, word, c.into_iter().collect());
+            row_least = row_least.min(value);
         }
-    }
-    // A letter put in.
-    for i in 0..=n {
-        for a in &alphabet {
-            let mut c = chars.clone();
-            c.insert(i, *a);
-            push(&mut out, word, c.into_iter().collect());
+        if row_least > usize::from(most) {
+            return None;
         }
+        before_before = std::mem::replace(&mut before, std::mem::replace(&mut now, vec![0; b.len() + 1]));
     }
-    if dist >= 2 {
-        let first = out.clone();
-        for w in first.iter().take(1200) {
-            for again in edits(w, 1).into_iter().take(400) {
-                push(&mut out, word, again);
-            }
-        }
-    }
-    out
+    let answer = before.get(b.len()).copied()?;
+    (answer <= usize::from(most)).then_some(answer as u8)
 }

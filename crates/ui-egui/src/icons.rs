@@ -1105,6 +1105,13 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line_c(&[(8.0, 15.5), (12.0, 15.5)], a);
         }
         // Review › Word Count: lines of text and a tally of four strokes and one across them.
+        // Spelling and grammar: an A, and a tick under it for what is right.
+        "spelling" => {
+            pen.line_c(&[(2.5, 13.5), (7.5, 3.5)], a);
+            pen.line_c(&[(7.5, 3.5), (12.5, 13.5)], a);
+            pen.line(&[(4.5, 9.5), (10.5, 9.5)]);
+            pen.check(11.5, 16.5, 1.2, green);
+        }
         "wordCount" => {
             pen.line(&[(2.5, 4.5), (17.5, 4.5)]);
             pen.line(&[(2.5, 8.5), (12.5, 8.5)]);

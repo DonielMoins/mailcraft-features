@@ -80,6 +80,9 @@ mod opened_files;
 mod opened_flow;
 mod own_keys;
 mod picture_cache;
+mod proofreading;
+#[cfg(test)]
+mod proofreading_tests;
 mod quit;
 #[cfg(target_os = "macos")]
 mod quit_macos;
@@ -1721,6 +1724,9 @@ fn services(
     let cancel = sync_cancel.clone();
     Services {
         file_dialog: Some(file_dialog),
+        // Spelling and grammar (#954): this computer's dictionaries are the engine's; grammar is a
+        // LanguageTool server's, asked on a thread of its own through this service.
+        proof_check: Some(proofreading::service()),
         // Mail arrives in pieces as the run goes (what was sent, then folder by folder), through a
         // channel short enough that a busy window holds the run back instead of piling pieces up.
         sync: Some(Box::new(move |request| {

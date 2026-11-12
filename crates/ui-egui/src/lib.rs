@@ -50,7 +50,6 @@ mod agent_names_tests;
 #[cfg(test)]
 mod agent_undo_tests;
 pub mod alerts;
-pub mod proof;
 pub mod approval;
 #[cfg(test)]
 mod attachment_menu_tests;
@@ -155,6 +154,8 @@ pub mod people_view;
 mod pick_item;
 #[cfg(test)]
 mod pick_item_tests;
+pub mod proof;
+mod proof_dialog;
 pub mod reading;
 mod reminders;
 mod report_problem;

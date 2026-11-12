@@ -902,7 +902,7 @@ fn review() -> Tab {
         g(
             "Proofing",
             vec![
-                Item::pending("review.spelling", "Spelling & Grammar", 0),
+                Item::big("spelling", "Spelling &\nGrammar", "review.spelling", no()).at(0, 0),
                 Item::pending("review.thesaurus", "Thesaurus", 0),
                 Item::big("wordCount", "Word\nCount", "review.wordCount", no()).at(0, 3),
             ],

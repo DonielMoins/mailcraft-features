@@ -672,6 +672,13 @@ pub(crate) fn show_doc(app: &mut MailApp, ui: &mut Ui, which: Which, min_height:
         }
     };
     resync(&mut layout, app);
+    // Proofing (#954): the body is looked at when it has rested, and what was found is drawn under
+    // it. A signature is checked as it is written, with the message's own dictionaries.
+    let checked: Vec<crate::proof::Place> = {
+        let text = body(app, which).map(|(b, _)| b.plain()).unwrap_or_default();
+        crate::proof::run(app, &ctx, &text);
+        app.proof.places(&text)
+    };
 
     let (rect, _) = ui.allocate_exact_size(vec2(width, layout.height.max(min_height)), Sense::hover());
     let resp = ui.interact(rect, id, if editable { Sense::click_and_drag() } else { Sense::hover() });
@@ -795,9 +802,23 @@ pub(crate) fn show_doc(app: &mut MailApp, ui: &mut Ui, which: Which, min_height:
             let _ = app.execute("compose.select", json!({"from": at, "to": at}));
             st.column = None;
         }
-        // Both take pictures: a signature, and a message's text since #547.
-        let takes = crate::text_menu::Takes::Pictures;
-        crate::text_menu::body(&resp, now(app, which).is_some_and(|(sel, _)| !sel.is_empty()), takes);
+        // Proofing (#954): a right click on a word no dictionary knows offers what could stand
+        // there instead, and the dictionary's own commands, in place of the text's menu.
+        let on_place = if which == Which::Message && resp.hovered() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+            ui.input(|i| i.pointer.interact_pos()).and_then(|p| layout.char_under(p - origin)).and_then(|at| {
+                let text = body(app, which).map(|(b, _)| b.plain()).unwrap_or_default();
+                app.proof.place_at(&text, at)
+            })
+        } else {
+            None
+        };
+        if let Some(place) = on_place {
+            crate::proof::menu(app, ui, &place);
+        } else {
+            // Both take pictures: a signature, and a message's text since #547.
+            let takes = crate::text_menu::Takes::Pictures;
+            crate::text_menu::body(&resp, now(app, which).is_some_and(|(sel, _)| !sel.is_empty()), takes);
+        }
     }
 
     // The keyboard.
@@ -935,6 +956,12 @@ pub(crate) fn show_doc(app: &mut MailApp, ui: &mut Ui, which: Which, min_height:
             paint_selection(painter, p, at, sel, fill);
         }
         painter.galley(at, p.galley.clone(), t.text);
+        if !checked.is_empty() {
+            let here: Vec<crate::proof::Place> = checked.iter().filter(|q| q.from < p.end() && q.to > p.start).cloned().collect();
+            if !here.is_empty() {
+                paint_places(painter, p, at, &here, &t);
+            }
+        }
         for b in &p.pictures {
             let r = b.rect.translate(at.to_vec2());
             let picture = shown.iter().find(|x| x.id == b.id);
@@ -1075,6 +1102,35 @@ fn settle(app: &MailApp, ui: &Ui, which: Which, st: &mut State) {
 }
 
 /// The selection's part of a paragraph, behind its text.
+/// A line under each proofing place of the paragraph `p`, which stands at `at` (#954): red for a
+/// word no dictionary knows, blue for what the grammar server found, in the row the place is on
+/// and only across its own characters.
+fn paint_places(painter: &egui::Painter, p: &Para, at: egui::Pos2, places: &[crate::proof::Place], t: &Tokens) {
+    for place in places {
+        let a = place.from.saturating_sub(p.start).min(p.chars);
+        let b = place.to.saturating_sub(p.start).min(p.chars);
+        if a >= b {
+            continue;
+        }
+        let colour = if place.kind == mailcraft_model::proof::Kind::Spelling { t.red } else { t.blue };
+        let mut seen = 0usize;
+        for row in &p.galley.rows {
+            let n = row.char_count_including_newline().0;
+            let (rs, re) = (seen, seen + n);
+            seen = re;
+            let (lo, hi) = (a.max(rs), b.min(re));
+            if lo >= hi {
+                continue;
+            }
+            let x0 = row.pos.x + row.x_offset(CharIndex(lo.saturating_sub(rs)));
+            let x1 = row.pos.x + row.x_offset(CharIndex(hi.saturating_sub(rs)));
+            let y = row.max_y() - 1.5;
+            let r = Rect::from_min_max(pos2(x0, y), pos2(x1, y + 1.5)).translate(at.to_vec2());
+            painter.rect_filled(r, 1.0, colour);
+        }
+    }
+}
+
 fn paint_selection(painter: &egui::Painter, p: &Para, at: egui::Pos2, sel: Selection, fill: egui::Color32) {
     let a = sel.start().saturating_sub(p.start).min(p.chars);
     let b = sel.end().saturating_sub(p.start).min(p.chars);

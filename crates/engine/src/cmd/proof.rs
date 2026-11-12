@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(REVIEW)
             .when_writing(needs_doc),
         CommandSpec::new("proof.change", "Change", "Review › Proofing", change)
-            .params(r#"{"text"?: string} (default: the first suggestion) — puts that in place of the place Review › Spelling & Grammar is at, as one step of the message's undo, then goes to the next one"#)
+            .params(r#"{"text"?: string, "from"?: number, "to"?: number} — puts `text` (default: the first suggestion) in place of `from`..`to` (characters of the body; default: the place Review › Spelling & Grammar is at) as one step of the message's undo; answers the walk"#)
             .when_writing(needs_doc),
         CommandSpec::new("proof.ignore", "Ignore Once", "Review › Proofing", ignore_once)
             .pure()
@@ -249,7 +249,7 @@ fn review(s: &mut Session, v: &Value) -> CmdResult {
         return Ok(walk_state(s, &text));
     }
     let mut found: Vec<Diagnostic> = if settings.check_spelling { s.proof.check(&settings, &text) } else { Vec::new() };
-    found.extend(grammar_places(v, &text));
+    found.extend(grammar_places(v, &text).into_iter().filter(|d| d.rule.as_ref().is_none_or(|r| !settings.ignored_rules.contains(r))));
     s.proof.start(&text, found);
     Ok(walk_state(s, &text))
 }
@@ -309,6 +309,7 @@ fn walk_state(s: &mut Session, text: &str) -> Value {
         "position": walk.at.min(total),
         "total": total,
         "at": at,
+        "rules": walk.items.iter().filter_map(|d| d.rule.clone()).collect::<Vec<String>>(),
         "text": walk.text,
         "left": walk.left(),
     })
@@ -317,17 +318,36 @@ fn walk_state(s: &mut Session, text: &str) -> Value {
 fn change(s: &mut Session, v: &Value) -> CmdResult {
     let (body, _) = s.doc().ok_or_else(|| bad("no message is being written"))?;
     let text = body.plain();
-    let Some(walk) = s.proof.current_walk(&text) else {
-        return Err(bad("Review › Spelling & Grammar was not started, or the message has changed since"));
+    // The place named by `from` and `to` (a right click's, a script's), else the one the walk is at.
+    let named = match (p::u64(v, "from"), p::u64(v, "to")) {
+        (Some(from), Some(to)) => Some((usize::try_from(from).unwrap_or(usize::MAX), usize::try_from(to).unwrap_or(usize::MAX))),
+        _ => None,
     };
-    let Some(place) = walk.current().cloned() else {
-        return Err(bad("there is nothing to change"));
+    let (_place, from, to, with) = match named {
+        Some((from, to)) => {
+            let (from, to) = if from <= to { (from, to) } else { (to, from) };
+            let with = p::str(v, "text").map(str::to_string).ok_or_else(|| bad("`text` (string) is required with `from` and `to`"))?;
+            let len = text.chars().count();
+            if from >= to || to > len {
+                return Err(bad("`from` and `to` are not a stretch of the message (in characters)"));
+            }
+            (None, from, to, with)
+        }
+        _ => {
+            let Some(walk) = s.proof.current_walk(&text) else {
+                return Err(bad("Review › Spelling & Grammar was not started, or the message has changed since"));
+            };
+            let Some(place) = walk.current().cloned() else {
+                return Err(bad("there is nothing to change"));
+            };
+            let with = match p::str(v, "text") {
+                Some(t) => t.to_string(),
+                None => place.suggestions.first().cloned().ok_or_else(|| bad("this one has no suggestion: put the right words in `text`"))?,
+            };
+            let (from, to) = char_range(&text, place.span).ok_or_else(|| bad("that place is no longer in the message"))?;
+            (Some(place), from, to, with)
+        }
     };
-    let with = match p::str(v, "text") {
-        Some(t) => t.to_string(),
-        None => place.suggestions.first().cloned().ok_or_else(|| bad("this one has no suggestion: put the right words in `text`"))?,
-    };
-    let (from, to) = char_range(&text, place.span).ok_or_else(|| bad("that place is no longer in the message"))?;
     let d = s.doc_mut().ok_or_else(|| bad("no message is being written"))?;
     d.body.replace_range(from, to, &with).map_err(|e| bad(e.to_string()))?;
     *d.dirty = true;

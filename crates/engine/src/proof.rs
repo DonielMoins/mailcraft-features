@@ -17,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mailcraft_model::proof::{Diagnostic, Kind, Language, ProofSettings, Source, Speller, Span};
+use mailcraft_model::proof::{Diagnostic, Kind, Language, ProofSettings, Source, Span, Speller};
 
 /// Most bytes one dictionary file may be: a `.dic` of the largest languages is a few megabytes.
 const MAX_DICT_BYTES: u64 = 16 * 1024 * 1024;
@@ -30,6 +30,8 @@ pub struct Proofing {
     key: Option<Key>,
     /// Why there is no dictionary, in words for File › Options, when there is none.
     pub note: Option<String>,
+    /// The dictionaries that were read, as File › Options names them.
+    pub read: Vec<String>,
     /// Review › Spelling & Grammar, while it is open.
     pub walk: Option<Walk>,
 }
@@ -72,13 +74,10 @@ impl Proofing {
     /// The words of every dictionary the settings turn on, read from this computer if they are not
     /// read yet (or were read for another set of languages).
     pub fn words(&mut self, settings: &ProofSettings) -> &Speller {
-        let key = Key {
-            languages: settings.active(),
-            dir: settings.dictionary_dir.clone(),
-            personal: settings.personal.len(),
-        };
+        let key = Key { languages: settings.active(), dir: settings.dictionary_dir.clone(), personal: settings.personal.len() };
         if self.key.as_ref() != Some(&key) {
             let (speller, note) = read_dictionaries(settings);
+            self.read = speller.languages().iter().map(|l| l.name().to_string()).collect();
             self.speller = speller;
             self.note = note;
             self.key = Some(key);
@@ -93,13 +92,22 @@ impl Proofing {
     }
 
     /// The spelling places of `text`, this computer's dictionaries alone.
+    ///
+    /// Nothing at all when there is no dictionary: without words to check against, every word
+    /// would be wrong, and a window that underlined a whole message would be lying about it.
     pub fn check(&mut self, settings: &ProofSettings, text: &str) -> Vec<Diagnostic> {
-        self.words(settings).check(text)
+        let words = self.words(settings);
+        if words.is_empty() { Vec::new() } else { words.check(text) }
     }
 
     /// What could stand in for `word`.
     pub fn suggest(&mut self, settings: &ProofSettings, word: &str, limit: usize) -> Vec<String> {
         self.words(settings).suggest(word, limit)
+    }
+
+    /// Whether there are words to check against at all.
+    pub fn ready(&mut self, settings: &ProofSettings) -> bool {
+        !self.words(settings).is_empty()
     }
 
     /// Starts the walk over `text`, with the places `found` (spelling found here, and grammar the
@@ -254,5 +262,8 @@ fn read_capped(path: &Path) -> Option<String> {
 
 /// Whether `d` is a place worth showing in the walk's own list: nothing here decides.
 pub fn is_sound(d: &Diagnostic, text: &str) -> bool {
-    d.is_sound() && d.span.fits(text) && matches!(d.kind, Kind::Spelling | Kind::Grammar | Kind::Style) && matches!(d.source, Source::Local | Source::Server)
+    d.is_sound()
+        && d.span.fits(text)
+        && matches!(d.kind, Kind::Spelling | Kind::Grammar | Kind::Style)
+        && matches!(d.source, Source::Local | Source::Server)
 }

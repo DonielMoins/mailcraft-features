@@ -23,7 +23,7 @@
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use egui::Ui;
-use mailcraft_model::proof::{Diagnostic, Kind, Language, ProofSettings, Span};
+use mailcraft_model::proof::{Diagnostic, Kind, Language, ProofSettings};
 use serde_json::{Value, json};
 
 use crate::MailApp;
@@ -49,6 +49,8 @@ pub struct Place {
     pub rule: Option<String>,
     /// What the server said of it, in its own words.
     pub message: String,
+    /// What the server said could stand there instead.
+    pub suggestions: Vec<String>,
 }
 
 /// What the host is asked for: the grammar server's address, the text, and the language to check
@@ -67,6 +69,61 @@ pub struct Reply {
     pub text: String,
     pub diagnostics: Vec<Diagnostic>,
     pub error: Option<String>,
+}
+
+/// Runs proofing for a frame: the body's text looked at when it has rested, the grammar server
+/// asked through the host, and any answer taken. Called by the composer, once a frame.
+pub(crate) fn run(app: &mut MailApp, ctx: &egui::Context, text: &str) {
+    // Taken out and put back so that the window is not borrowed twice: a check needs the session
+    // and the places side by side, and both live in it.
+    let mut proof = std::mem::take(&mut app.proof);
+    proof.frame(app, ctx, text);
+    app.proof = proof;
+}
+
+/// Asks the grammar server, as File › Options' Test the connection does: one short text, and the
+/// answer (or why there is none) said in words on the page, never in a dialog that would stop the
+/// window.
+pub(crate) fn test(app: &mut MailApp) {
+    let settings = app.session.prefs.proof.clone();
+    let Some(service) = app.services.proof_check.as_ref() else {
+        app.proof.tested = Some(crate::tl!("This build has no grammar server to ask.").to_string());
+        return;
+    };
+    if !settings.grammar_allowed() {
+        app.proof.tested = Some(crate::tl!("That server is on another computer, and File › Options does not allow one.").to_string());
+        return;
+    }
+    if settings.grammar_url.trim().is_empty() {
+        app.proof.tested = Some(crate::tl!("Name the grammar server's address first.").to_string());
+        return;
+    }
+    let language = settings.active().first().copied().unwrap_or(Language::EnCa);
+    // A text with something in it for every language's rules to look at, and nothing of the
+    // owner's: the server is told only that this computer is checking a grammar server's answers.
+    let text = match language {
+        Language::FrFr | Language::FrCa => "Je vais envoyer le document demain.".to_string(),
+        _ => "I will send the document tomorrow.".to_string(),
+    };
+    app.proof.tested = Some(crate::tl!("Asking…").to_string());
+    app.proof.testing = Some(service(Request { url: settings.grammar_url.clone(), text, language }));
+}
+
+/// What the connection test said, once it has an answer; `None` when no test was made.
+pub(crate) fn test_result(app: &mut MailApp) -> Option<String> {
+    let channel = app.proof.testing.as_ref()?;
+    let reply = match channel.try_recv() {
+        Ok(reply) => reply,
+        Err(TryRecvError::Empty) => return Some(crate::tl!("Asking…").to_string()),
+        Err(TryRecvError::Disconnected) => Reply { text: String::new(), diagnostics: Vec::new(), error: Some("the answer was lost".into()) },
+    };
+    app.proof.testing = None;
+    let said = match reply.error {
+        Some(error) => error,
+        None => format!("{} {}", crate::tl!("The server answered:"), crate::tln!(reply.diagnostics.len(), "{n} note", "{n} notes")),
+    };
+    app.proof.tested = Some(said.clone());
+    Some(said)
 }
 
 /// What proofing has found, and what it is waiting for.
@@ -89,6 +146,9 @@ pub struct Proof {
     pub(crate) again: bool,
     /// How many grammar requests were made this session, for the tests and the benchmarks.
     pub(crate) asked: usize,
+    /// A connection test on its way (File › Options), and what the last one came to.
+    pub(crate) testing: Option<Receiver<Reply>>,
+    pub(crate) tested: Option<String>,
 }
 
 impl std::fmt::Debug for Proof {
@@ -179,7 +239,9 @@ impl Proof {
         let answer = match channel.try_recv() {
             Ok(reply) => Some(reply),
             Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Reply { text: asked_for.clone(), diagnostics: Vec::new(), error: Some("the grammar check was lost".into()) }),
+            Err(TryRecvError::Disconnected) => {
+                Some(Reply { text: asked_for.clone(), diagnostics: Vec::new(), error: Some("the grammar check was lost".into()) })
+            }
         };
         let Some(reply) = answer else { return };
         self.asking = None;
@@ -236,7 +298,15 @@ fn as_place(text: &str, d: &Diagnostic) -> Option<Place> {
     let from = text.get(..d.span.start)?.chars().count();
     let to = text.get(..d.span.end)?.chars().count();
     let word = text.get(d.span.start..d.span.end)?.to_string();
-    (from < to).then_some(Place { from, to, kind: d.kind, word, rule: d.rule.clone(), message: d.message.clone() })
+    (from < to).then_some(Place {
+        from,
+        to,
+        kind: d.kind,
+        word,
+        rule: d.rule.clone(),
+        message: d.message.clone(),
+        suggestions: d.suggestions.clone(),
+    })
 }
 
 /// The spelling places of `text`, from this computer's dictionaries, in characters.
@@ -265,7 +335,9 @@ pub fn grammar_places(app: &MailApp, text: &str) -> Vec<Value> {
                 "start": start,
                 "end": end,
                 "kind": if p.kind == Kind::Style { "style" } else { "grammar" },
-                "message": "",
+                "message": p.message,
+                "suggestions": p.suggestions,
+                "rule": p.rule,
             }))
         })
         .collect()
@@ -276,7 +348,7 @@ pub fn grammar_places(app: &MailApp, text: &str) -> Vec<Value> {
 /// and a script run, so nothing here changes the text by itself. Answers whether it should close.
 pub(crate) fn menu(app: &mut MailApp, ui: &Ui, place: &Place) -> bool {
     let mut close = false;
-    egui::Area::new(egui::Id::new(("mailcraft-proof-menu", place.from, place.to)))
+    egui::Area::new(egui::Id::unique(("mailcraft-proof-menu", place.from, place.to)))
         .order(egui::Order::Foreground)
         .fixed_pos(ui.input(|i| i.pointer.interact_pos()).unwrap_or(egui::Pos2::ZERO))
         .show(ui.ctx(), |ui| {
@@ -285,15 +357,14 @@ pub(crate) fn menu(app: &mut MailApp, ui: &Ui, place: &Place) -> bool {
                 if !place.word.is_empty() {
                     ui.label(egui::RichText::new(&place.word).strong());
                 }
-                let suggestions = app
-                    .run("proof.suggest", json!({ "word": place.word, "limit": 6 }))
-                    .ok()
-                    .and_then(|v| v.get("suggestions").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()));
+                let suggestions = app.run("proof.suggest", json!({ "word": place.word, "limit": 6 })).ok().and_then(|v| {
+                    v.get("suggestions").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+                });
                 match suggestions {
                     Some(list) if !list.is_empty() => {
                         for s in list {
                             if ui.add(egui::Button::new(egui::RichText::new(&s)).frame(false)).clicked() {
-                                let _ = app.execute("proof.change", json!({ "text": s }));
+                                let _ = app.execute("proof.change", json!({ "text": s, "from": place.from, "to": place.to }));
                                 close = true;
                                 break;
                             }

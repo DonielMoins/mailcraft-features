@@ -420,8 +420,12 @@ impl RichBody {
         if from == to {
             return Ok(());
         }
+        // The look is the replaced text's own, taken before it goes: what is put in looks as what
+        // it stands for did, so correcting a word inside bold or a link leaves the rest as it was.
+        // (`style_at` answers with the look of the character *before* a position, so the first
+        // character of the range is asked for as the one after its own start.)
         self.edit(false, |t, s| {
-            let style = t.style_at(from);
+            let style = t.style_at(from.saturating_add(1));
             t.delete(from, to)?;
             let end = t.insert(from, with, &style)?;
             *s = Selection::caret(end);

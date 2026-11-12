@@ -53,12 +53,12 @@ mod opening_tests;
 mod openpgp_signature_tests;
 mod picture_fit;
 pub mod private_keys;
-pub mod proof;
 #[cfg(test)]
 #[allow(dead_code)]
 mod private_keys_fixtures_tests;
 #[cfg(test)]
 mod private_keys_tests;
+pub mod proof;
 pub mod sample;
 pub mod sender_warnings;
 mod session;
