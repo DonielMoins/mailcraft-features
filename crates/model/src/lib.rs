@@ -31,6 +31,7 @@ mod note;
 mod offline;
 pub mod pictures;
 pub mod pop;
+pub mod proof;
 pub mod protected;
 pub mod provider;
 pub mod public_keys;

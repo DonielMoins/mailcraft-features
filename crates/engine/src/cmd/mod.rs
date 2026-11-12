@@ -97,6 +97,7 @@ mod opened_file_tests;
 pub mod people;
 pub mod people_merge;
 pub mod picture;
+pub mod proof;
 #[cfg(test)]
 mod picture_tests;
 #[cfg(test)]
@@ -168,6 +169,7 @@ pub fn registry() -> Registry {
     v.extend(format::specs());
     v.extend(picture::specs());
     v.extend(writing_tools::specs());
+    v.extend(proof::specs());
     v.extend(folder::specs());
     v.extend(view::specs());
     v.extend(calendar::specs());

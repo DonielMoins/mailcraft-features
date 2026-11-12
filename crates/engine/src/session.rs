@@ -893,6 +893,9 @@ pub struct Prefs {
     /// mail that is sent waits in the Outbox. Off unless the owner turns it on; kept between runs.
     #[serde(skip_serializing_if = "is_false")]
     pub offline: bool,
+    /// Spelling and grammar while writing (#954): the dictionaries that are on, the words the
+    /// owner added, and the grammar server. Kept between runs; nothing of a message is kept here.
+    pub proof: mailcraft_model::proof::ProofSettings,
 }
 
 impl Default for Prefs {
@@ -929,6 +932,7 @@ impl Default for Prefs {
             zoom: Prefs::ZOOM_DEFAULT,
             recent_searches: Vec::new(),
             offline: false,
+            proof: mailcraft_model::proof::ProofSettings::default(),
         }
     }
 }
@@ -1059,6 +1063,10 @@ pub struct Session {
     /// work on it instead of the message being written ([`Session::doc`]).
     pub signature_edit: Option<SignatureEdit>,
     pub prefs: Prefs,
+    /// Spelling and grammar while writing (#954): the dictionaries read from this computer this
+    /// session, and Review › Spelling & Grammar's walk. Never saved; the settings it reads are in
+    /// [`Prefs::proof`].
+    pub proof: crate::proof::Proofing,
     pub registry: Arc<Registry>,
     /// The mailbox file, once opened from or saved to one.
     pub path: Option<PathBuf>,
@@ -1284,6 +1292,7 @@ impl Session {
             compose_seq: 0,
             signature_edit: None,
             prefs: Prefs::default(),
+            proof: crate::proof::Proofing::default(),
             registry: Arc::new(crate::cmd::registry()),
             path: None,
             dirty: false,

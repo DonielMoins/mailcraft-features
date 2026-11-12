@@ -403,6 +403,34 @@ impl RichBody {
         Ok(())
     }
 
+    /// Put `with` in place of `from..to` (a proofing correction, #954): as one step of the
+    /// message's undo, and in the look the first character there had, so that correcting a word
+    /// inside bold text or a link leaves the rest of it as it was. The caret goes after what was
+    /// put in.
+    ///
+    /// A range that is not one of the text (past its end, or between two halves of a character)
+    /// is an error and changes nothing, so that a correction worked out for a text that has since
+    /// changed can never land on other words: the caller compares the body it checked with the
+    /// body as it is now before asking.
+    pub fn replace_range(&mut self, from: usize, to: usize, with: &str) -> Result<(), ModelError> {
+        let len = self.text.len();
+        if from > to || to > len {
+            return Err(ModelError::Invalid("that is not a stretch of the text".into()));
+        }
+        if from == to {
+            return Ok(());
+        }
+        self.edit(false, |t, s| {
+            let style = t.style_at(from);
+            t.delete(from, to)?;
+            let end = t.insert(from, with, &style)?;
+            *s = Selection::caret(end);
+            Ok(())
+        })?;
+        self.typing = None;
+        Ok(())
+    }
+
     /// Put `with` in place of each of `places` ([`RichText::find`]), as one step: what goes in
     /// looks as the first character of its place did. The selection stays on the text it was on.
     pub fn replace_places(&mut self, places: &[Place], with: &str) -> Result<(), ModelError> {
