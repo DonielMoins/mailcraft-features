@@ -49,6 +49,31 @@ fn settings_written_come_back_whole() {
 }
 
 #[test]
+fn calendar_reminder_popup_preferences_survive_the_hosts_file_roundtrip() {
+    let s = Scratch::new("calendar-reminder-popups");
+    let path = s.file("ui.json", r#"{"theme":"dark"}"#);
+    let old = read_prefs(&path).0.unwrap();
+    assert_eq!(serde_json::to_value(&old).unwrap()["showCalendarReminderPopups"], true);
+    let ui: UiState = serde_json::from_value(serde_json::json!({
+        "showCalendarReminderPopups": false,
+        "suppressedCalendarReminderPopups": ["42@2026-10-14T16:00"],
+        "alertNewMail": true,
+        "alertReminders": true
+    }))
+    .unwrap();
+    write_prefs(&path, &ui).unwrap();
+    drop(ui);
+    let (restored, unread) = read_prefs(&path);
+    assert_eq!(unread, None);
+    let restored = serde_json::to_value(restored.unwrap()).unwrap();
+    assert_eq!(restored["showCalendarReminderPopups"], false);
+    assert_eq!(restored["suppressedCalendarReminderPopups"], serde_json::json!(["42@2026-10-14T16:00"]));
+    assert_eq!(restored["alertNewMail"], true);
+    assert_eq!(restored["alertReminders"], true);
+    assert_eq!(names(&s.0), ["ui.json"]);
+}
+
+#[test]
 fn a_good_file_is_read_and_a_missing_one_is_nothing_to_say() {
     let s = Scratch::new("good");
     let path = s.file("ui.json", r#"{"theme": "dark", "view": {"sort": "from"}}"#);

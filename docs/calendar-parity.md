@@ -85,6 +85,7 @@ server; what has met the real Microsoft 365 service is only what the owner has u
 | Outlook does | MailCraft |
 |---|---|
 | A reminders window of its own, listing what is due, with Dismiss, Dismiss All and Snooze for a chosen time | Done |
+| Reminders can be turned off ("Show calendar reminder pop-ups") | Done: File › Options › Calendar (`ui.reminderPopups`, on by default). Off, a reminder falling due opens no window, asks nothing of the taskbar and shows no desktop alert; new mail's alerts are unchanged, View › Reminders Window still lists what is due, and turning it back on brings only what falls due after |
 | Double-click opens the item | Done: in the item's own window; of an item that repeats, the occurrence the reminder is for, without asking |
 | Join Online on the reminder of an online meeting | Done: Join beside Dismiss, for a meeting that has a link (shown when the pointer rests on it) |
 | Sound, and a notification while the program is in the background | Later (the taskbar asks for attention) |

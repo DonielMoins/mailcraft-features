@@ -3558,6 +3558,11 @@ msgid "Display name"
 msgstr "Nombre para mostrar"
 
 #. interface
+#: crates/ui-egui/src/backstage.rs
+msgid "Display reminder windows when calendar appointments are due. Disabling this option does not remove reminders from appointments."
+msgstr ""
+
+#. interface
 #: crates/ui-egui/src/forms.rs
 #, fuzzy
 msgid "Do"
@@ -11278,6 +11283,11 @@ msgstr ""
 msgid "Show as Conversations"
 msgstr "Mostrar como conversaciones"
 
+#. command label, interface
+#: crates/ui-egui/src/backstage.rs crates/ui-egui/src/lib.rs
+msgid "Show calendar reminder pop-ups"
+msgstr ""
+
 #. command label
 #: crates/engine/src/cmd/calendar/invitation.rs
 #, fuzzy
@@ -15776,7 +15786,7 @@ msgid "`notice` is installsItself or didntStart"
 msgstr "`notice` es installsItself o didntStart"
 
 #. interface
-#: crates/ui-egui/src/updates.rs
+#: crates/ui-egui/src/lib.rs crates/ui-egui/src/updates.rs
 #, fuzzy
 msgid "`value` is true or false"
 msgstr "`value` es true o false"

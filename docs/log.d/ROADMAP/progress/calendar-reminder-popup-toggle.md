@@ -1,0 +1,1 @@
+| 2026-11-12 | File › Options › Calendar, "Show calendar reminder pop-ups" (`ui.reminderPopups`, on by default): off, a reminder falling due opens no window, asks nothing of the taskbar and shows no reminder desktop alert, while new mail's alerts stay, View › Reminders Window still lists what is due, and turning it back on brings only what falls due after; kept in `ui.json`. |

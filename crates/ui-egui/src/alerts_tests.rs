@@ -291,6 +291,21 @@ fn the_switches_are_kept_and_checked() {
 }
 
 #[test]
+fn disabling_calendar_popups_does_not_silence_new_mail_arriving_through_sync() {
+    let (mut app, recorder, account, inbox) = window();
+    let ctx = egui::Context::default();
+    app.execute("ui.reminderPopups", json!({"value": false})).unwrap();
+    run(&mut app, &ctx, false, account, inbox, &[(2, "Avery", "Still announced")]);
+    let shown = recorder.shown.lock().unwrap();
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].kind, AlertKind::Mail);
+    assert_eq!(shown[0].title, "Avery");
+    assert_eq!(shown[0].body, "Still announced");
+    assert!(app.ui.alert_new_mail);
+    assert!(app.session.mailbox.messages.values().any(|message| message.subject == "Still announced"));
+}
+
+#[test]
 fn why_alerts_cant_be_shown_is_said() {
     let (mut app, ..) = window();
     app.services.alert = Some(Box::new(Recorder { trouble: Some(AlertTrouble::NoService), ..Default::default() }));

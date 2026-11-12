@@ -155,6 +155,8 @@ mod pick_item;
 #[cfg(test)]
 mod pick_item_tests;
 pub mod reading;
+#[cfg(test)]
+mod reminder_popup_preferences_tests;
 mod reminders;
 mod report_problem;
 pub mod ribbon;
@@ -1023,6 +1025,11 @@ pub struct UiState {
     pub alert_new_mail: bool,
     /// Show a desktop alert for each reminder as it falls due: on unless the owner turns it off.
     pub alert_reminders: bool,
+    /// Automatically present calendar reminders, unless the owner turns their pop-ups off.
+    pub show_calendar_reminder_popups: bool,
+    /// Occurrences suppressed while pop-ups were off, never replayed automatically after a restart.
+    /// The reminder presenter retains only current due keys, within its bounded queue.
+    pub suppressed_calendar_reminder_popups: Vec<String>,
     /// The filters Advanced Search's Add filters puts in its panel (#329).
     pub advanced_filters: advanced_search::Filters,
     /// The public facts of the private keys imported in File › Options › Security (#30): never
@@ -1080,6 +1087,8 @@ impl Default for UiState {
             update_install_told: false,
             alert_new_mail: true,
             alert_reminders: true,
+            show_calendar_reminder_popups: true,
+            suppressed_calendar_reminder_popups: Vec::new(),
             imported_keys: Vec::new(),
         }
     }
@@ -1354,6 +1363,12 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "Desktop Alerts",
         "File › Options",
         r#"{"newMail"?: bool, "reminders"?: bool} — whether the system shows a desktop alert when new mail arrives in an Inbox of your own accounts while the window isn't in front, and for each reminder as it falls due (both on unless turned off). Nothing else is changed, and no alert is shown by this. Answers the two switches"#,
+    ),
+    (
+        "ui.reminderPopups",
+        "Show calendar reminder pop-ups",
+        "File › Options › Calendar",
+        r#"{"value"?: bool} — enable or disable automatic calendar reminder windows, desktop reminder alerts and taskbar attention (default on); omitted value toggles. Does not change appointment reminders or mail alerts. Manual View › Reminders Window remains available. Re-enabling does not replay suppressed occurrences. Answers {"value": bool}"#,
     ),
     ("ui.open", "Open Mailbox", "File › Open & Export", "{}"),
     ("ui.import", "Import", "File › Open & Export", "{}"),
@@ -2664,6 +2679,22 @@ impl MailApp {
                             "{n} remembered sign-ins could not be removed from the credential store"
                         ));
                     }
+                }
+                Ok(json!({"value": on}))
+            }
+            "ui.reminderPopups" => {
+                let on = match p.get("value") {
+                    None => !self.ui.show_calendar_reminder_popups,
+                    Some(value) => match value.as_bool() {
+                        Some(on) => on,
+                        None => return Some(Err(tl!("`value` is true or false").to_string())),
+                    },
+                };
+                reminders::set_popups(self, on);
+                // A script may change this between frames: retire an automatic window now,
+                // without waiting for the reminder timer or the next pointer event.
+                if let Some(ctx) = &self.ctx {
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
                 }
                 Ok(json!({"value": on}))
             }

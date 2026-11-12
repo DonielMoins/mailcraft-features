@@ -1,0 +1,1 @@
+| 2026-11-12 | The reminder window can be turned off (File › Options › Calendar, "Show calendar reminder pop-ups"): no automatic window, taskbar attention or reminder desktop alert; new mail's alerts stay, and View › Reminders Window still lists what is due |

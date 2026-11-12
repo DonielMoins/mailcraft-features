@@ -777,6 +777,25 @@ fn options(app: &mut MailApp, ui: &mut Ui, t: &Tokens) {
             }
         });
     });
+    // (A reminder falling due opens the reminders window, asks the taskbar for attention and shows
+    // a desktop alert, unless this is off; View › Reminders Window still lists what is due, and
+    // nothing of a reminder is changed or unsent.)
+    let mut popups = app.ui.show_calendar_reminder_popups;
+    let switch = ui.checkbox(&mut popups, tl!("Show calendar reminder pop-ups"));
+    app.hit.add("calendarReminderPopups", 0, switch.rect);
+    ui.horizontal(|ui| {
+        ui.add_space(20.0);
+        ui.label(
+            egui::RichText::new(tl!(
+                "Display reminder windows when calendar appointments are due. Disabling this option does not remove reminders from appointments."
+            ))
+            .font(regular(11.5))
+            .color(t.text_dim),
+        );
+    });
+    if switch.changed() {
+        let _ = app.run("ui.reminderPopups", json!({"value": popups}));
+    }
     row(ui, tl!("Time scale"), |ui| {
         // What one row of the calendar's hours stands for.
         let current = mailcraft_engine::cmd::calendar_extra::time_scale(&app.session);
