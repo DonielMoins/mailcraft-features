@@ -25,6 +25,10 @@ use crate::ModelError;
 mod grammar;
 mod spell;
 #[cfg(test)]
+mod grammar_tests;
+#[cfg(test)]
+mod spell_tests;
+#[cfg(test)]
 mod tests;
 
 pub use grammar::{CheckRequest, parse_answer};

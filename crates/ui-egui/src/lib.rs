@@ -50,6 +50,7 @@ mod agent_names_tests;
 #[cfg(test)]
 mod agent_undo_tests;
 pub mod alerts;
+pub mod proof;
 pub mod approval;
 #[cfg(test)]
 mod attachment_menu_tests;
@@ -246,6 +247,12 @@ pub use unconfirmed::ConfirmedMailbox;
 /// Platform services injected by the host (file dialogs, downloads, servers, storage).
 #[derive(Default)]
 pub struct Services {
+    /// Spelling and grammar while writing (#954): the text to check, the grammar server's address
+    /// and the language to check it as. The host asks the server on a thread of its own — this
+    /// crate opens no connection — and answers through the channel, or says why there is none.
+    /// Absent in the browser build and in the tests: grammar is then never asked for, and spelling,
+    /// which is this computer's, still works.
+    pub proof_check: Option<Box<dyn Fn(proof::Request) -> Receiver<proof::Reply>>>,
     /// Desktop: the icon and application id of the main window, which every other window of the
     /// system (reminders, messages) takes too.
     pub window_identity: Option<windows::WindowIdentity>,
@@ -1523,6 +1530,8 @@ pub struct MailApp {
     pub(crate) security: security::State,
     pub ui: UiState,
     pub services: Services,
+    /// What proofing found in the message being written, and what it is waiting for (#954).
+    pub(crate) proof: proof::Proof,
     pub dialog: Option<dialogs::Dialog>,
     /// The contacts picked together in the People list with Ctrl (⌘ on a Mac) and a click, the
     /// selected one among them; empty when one contact alone is selected. The window's own: a
@@ -1889,6 +1898,7 @@ impl MailApp {
             attachment_preview: None,
             pending_attachment_preview: None,
             services,
+            proof: proof::Proof::default(),
             dialog: None,
             people_picked: Vec::new(),
             status_msg: None,

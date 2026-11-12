@@ -145,7 +145,7 @@ pub fn parse_answer(body: &[u8], text: &str, language: Language, ignored: &[Stri
 /// Where each character of `text` is, in UTF-16 code units and in bytes: only the starts of
 /// characters, in order, with the UTF-16 count of each (`2` for a character outside the basic
 /// plane).
-fn utf16_index(text: &str) -> Vec<(usize, usize)> {
+pub(super) fn utf16_index(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::with_capacity(text.len().min(4_096));
     let mut units = 0usize;
     for (at, c) in text.char_indices() {
